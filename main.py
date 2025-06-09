@@ -730,14 +730,33 @@ async def reset_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 # Download and preprocess data
-def download_and_preprocess_data(ticker):
-    stock_data = yf.download(ticker, start='2020-01-01', end='2023-01-01')
-    stock_data.fillna(method='ffill', inplace=True)
-    stock_data['Return'] = stock_data['Close'].pct_change()
-    stock_data.dropna(inplace=True)
-    features = stock_data[['Open', 'High', 'Low', 'Close', 'Volume']].values
-    labels = stock_data['Return'].values
-    return features, labels
+def download_and_preprocess_data(ticker, start='2020-01-01', end='2023-01-01', retries=3, delay=5):
+    for attempt in range(retries):
+        try:
+            stock_data = yf.download(ticker, start=start, end=end)
+            if stock_data.empty:
+                print(f"[Attempt {attempt + 1}] Empty data for {ticker}. Retrying in {delay}s...")
+                time.sleep(delay)
+                continue
+
+            # Preprocess
+            stock_data.ffill(inplace=True)
+            stock_data['Return'] = stock_data['Close'].pct_change()
+            stock_data.dropna(inplace=True)
+
+            features = stock_data[['Open', 'High', 'Low', 'Close', 'Volume']].values
+            labels = stock_data['Return'].values
+
+            if len(features) == 0 or len(labels) == 0:
+                raise ValueError("No features or labels available after preprocessing.")
+
+            return features, labels
+
+        except Exception as e:
+            print(f"[Attempt {attempt + 1}] Error: {e}. Retrying in {delay}s...")
+            time.sleep(delay)
+
+    raise RuntimeError(f"Failed to download or preprocess data for {ticker} after {retries} attempts.")
 
 # Train model
 def train_model(features, labels):
@@ -756,19 +775,42 @@ def predict_return(model, open_price, high_price, low_price, close_price, volume
     return predicted_return[0]
 
 # Function to get the latest stock prices (example function, to be implemented)
+from telegram import Update
+from telegram.ext import ContextTypes
+
 def get_latest_stock_prices(ticker):
-    stock_data = yf.download(ticker, period='1d')
-    latest_prices = stock_data.iloc[-1][['Open', 'High', 'Low', 'Close', 'Volume']].values
-    return latest_prices
+    try:
+        stock_data = yf.download(ticker, period='1d', progress=False)
+        if stock_data.empty:
+            return None
+        latest_row = stock_data.iloc[-1]
+        return latest_row[['Open', 'High', 'Low', 'Close', 'Volume']].values
+    except Exception as e:
+        print(f"[ERROR] Failed to fetch data for {ticker}: {e}")
+        return None
+
 async def predict(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if len(context.args) != 1:
-        await update.message.reply_text('Usage: /predict <stock symbol (i.e., stockname.BO For Indian stock or stocksymbol for global)>')
+        await update.message.reply_text(
+            'Usage: /predict <stock symbol>\nExample: /predict RELIANCE.BO or /predict AAPL'
+        )
         return
 
     ticker = context.args[0].upper()
     latest_prices = get_latest_stock_prices(ticker)
-    predicted_return = predict_return(model, *latest_prices)
-    await update.message.reply_text(f'The predicted return for {ticker} is {predicted_return:.2%}')
+
+    if latest_prices is None:
+        await update.message.reply_text(f"Couldn't fetch data for {ticker}. Please check the symbol and try again.")
+        return
+
+    try:
+        latest_prices_reshaped = np.array(latest_prices).reshape(1, -1)  # model expects 2D
+        predicted_return = model.predict(latest_prices_reshaped)[0]
+        await update.message.reply_text(f"The predicted return for {ticker} is {predicted_return:.2%}")
+    except Exception as e:
+        print(f"[ERROR] Prediction failed: {e}")
+        await update.message.reply_text("An error occurred during prediction. Please try again later.")
+
 df = pd.read_csv('stocks.csv')
 # Set up logging
 logging.basicConfig(level=logging.INFO)
