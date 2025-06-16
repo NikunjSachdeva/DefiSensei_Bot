@@ -19,6 +19,23 @@ from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+from flask import Flask
+from threading import Thread
+
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "Bot is alive!"
+
+def run():
+    app.run(host='0.0.0.0', port=10000)
+
+def keep_alive():
+    t = Thread(target=run)
+    t.start()
+
+keep_alive()
 
 # --- Global Constants ---
 TOKEN = os.getenv("TOKEN")
